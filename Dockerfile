@@ -1,65 +1,53 @@
 FROM ubuntu:latest
-
-# Update Timezone
-ENV TZ Asia/Hong_Kong
-RUN echo $TZ > /etc/timezone
+MAINTAINER Andy Tam <andycctam@hotmail.com>
 
 # Use Local Mirror hk.archive.ubuntu.com 
 RUN sed -i -e "s/archive/hk\.archive/" /etc/apt/sources.list
 
-#add repository and update the container
-#Installation of nesesary package/software for this containers...
-RUN apt-get update && \
-	DEBIAN_FRONTEND=noninteractive apt-get install -y -q php \
-                    libapache2-mod-php \
-                    php-gd \
-                    apache2 \
-                    php-mysql \
-                    php-json \
-                    php-curl \
-                    php-intl \
-                    php-sqlite3 \
-                    php-mbstring \
-                    unzip \
-				#	wkhtmltox \
-                    && apt-get clean \
-                    && rm -rf /tmp/* /var/tmp/*  \
-                    && rm -rf /var/lib/apt/lists/*
+# Install apache, PHP, and supplimentary programs. openssh-server, curl, and lynx-cur are for debugging the container.
+RUN apt-get update && apt-get -y upgrade && DEBIAN_FRONTEND=noninteractive apt-get -y install \
+    apache2 php7.0 php7.0-mysql libapache2-mod-php7.0 curl lynx-cur \
+    && apt-get clean \
+    && rm -rf /tmp/* /var/tmp/* \
+    && rm -rf /var/lib/apt/lists/* 
 
-# Add apache config to enable .htaccess and do some stuff you want
-COPY apache_default /etc/apache2/sites-available/000-default.conf
+# Enable apache mods.
+RUN a2enmod php7.0
+RUN a2enmod rewrite
 
-# Enable mod rewrite and listen to localhost
-RUN a2enmod rewrite && \
-	echo "ServerName localhost" >> /etc/apache2/apache2.conf
+# Update the PHP.ini file, enable <? ?> tags and quieten logging.
+RUN sed -i "s/short_open_tag = Off/short_open_tag = On/" /etc/php/7.0/apache2/php.ini
+RUN sed -i "s/error_reporting = .*$/error_reporting = E_ERROR | E_WARNING | E_PARSE/" /etc/php/7.0/apache2/php.ini
 
-################################################################
-# Example, deploy a default CakePHP 3 installation from source #
-################################################################
+# Manually set up the apache environment variables
+ENV APACHE_RUN_USER www-data
+ENV APACHE_RUN_GROUP www-data
+ENV APACHE_LOG_DIR /var/log/apache2
+ENV APACHE_LOCK_DIR /var/lock/apache2
+ENV APACHE_PID_FILE /var/run/apache2.pid
 
-# Clone your application (cloning CakePHP 3 / app instead of composer create project to demonstrate application deployment example)
-RUN rm -rf /var/www/html && \
-	git clone https://github.com/cakephp/app.git /var/www/html
-
-# Set workdir (no more cd from now)
-WORKDIR /var/www/html
-
-# Composer install application
-RUN composer -n install
-
-# Copy the app.php file
-RUN cp config/app.default.php config/app.php && \
-	# Inject some non random salt for this example 
-	sed -i -e "s/__SALT__/somerandomsalt/" config/app.php && \
-	# Make sessionhandler configurable via environment
-	sed -i -e "s/'php',/env('SESSION_DEFAULTS', 'php'),/" config/app.php  && \
-	# Set write permissions for webserver
-	chgrp -R www-data logs tmp && \
-	chmod -R g+rw logs tmp 
-
-####################################################
-# Expose port and run Apache webserver             #
-####################################################
-
+# Expose apache.
 EXPOSE 80
-CMD ["/usr/sbin/apache2ctl", "-DFOREGROUND"]
+
+# Copy this repo into place.
+#ADD www /var/www/site
+
+# Update the default apache site with the config we created.
+RUN echo "<VirtualHost *:80>
+  ServerAdmin me@mydomain.com
+  DocumentRoot /var/www/site
+
+  <Directory /var/www/site/>
+      Options Indexes FollowSymLinks MultiViews
+      AllowOverride All
+      Order deny,allow
+      Allow from all
+  </Directory>
+
+  ErrorLog ${APACHE_LOG_DIR}/error.log
+  CustomLog ${APACHE_LOG_DIR}/access.log combined
+
+</VirtualHost>" > /etc/apache2/sites-enabled/000-default.conf
+
+# By default start up apache in the foreground, override with /bin/bash for interative.
+CMD /usr/sbin/apache2ctl -D FOREGROUND
